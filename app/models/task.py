@@ -8,12 +8,12 @@ class Task(Base):
     __tablename__ = "tasks"
     id            = Column(Integer, primary_key=True)
     user_id       = Column(String, ForeignKey("users.id"), nullable=False)
-    raw_input     = Column(String)           # what user typed
-    task_type     = Column(String)           # "web_monitor" | "date_reminder"
-    config        = Column(JSON)             # url, condition, etc.
-    schedule_mins = Column(Integer)          # how often to check
+    raw_input     = Column(String)          
+    task_type     = Column(String)           
+    config        = Column(JSON)             
+    schedule_mins = Column(Integer)             
     status        = Column(String, default="active")
-    last_hash     = Column(String)           # MD5 of last scraped content
+    last_hash     = Column(String)           
     last_run      = Column(DateTime)
     next_run      = Column(DateTime)
     created_at    = Column(DateTime, default=datetime.utcnow)
