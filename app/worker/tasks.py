@@ -13,7 +13,7 @@ from app.models.task_run import TaskRun
 from app.models.notification import Notification
 from app.services.scraper import fetch_page
 from app.services.llm import check_condition
-from app.services.notifier import send_notification
+from app.services.notifier import send_notification, send_test_notification
 from app.worker.celery_app import celery_app
 
 # Create synchronous engine and session maker for Celery worker operations

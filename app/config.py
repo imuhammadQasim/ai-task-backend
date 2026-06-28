@@ -12,6 +12,8 @@ class Settings(BaseSettings):
     STRIPE_WEBHOOK_SECRET: str = ""
     CLERK_WEBHOOK_SECRET: str = ""
     META_PAGE_TOKEN: str = ""
+    GMAIL_EMAIL: str = ""
+    GMAIL_APP_PASSWORD: str = ""
 
     class Config:
         env_file = ".env"

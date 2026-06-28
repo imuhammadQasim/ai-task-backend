@@ -2,9 +2,17 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
+from pydantic import BaseModel
 from app.database import get_db
 from app.routers.auth import get_current_user
 from app.models.notification import Notification
+from app.services.notifier import send_test_email
+
+
+class SendTestRequest(BaseModel):
+    email: str
+    channel: str
+
 
 router = APIRouter()
 
@@ -53,3 +61,16 @@ async def list_task_notifications(
         }
         for n in notifs
     ]
+
+@router.post("/send-test", response_model=bool)
+async def send_test_notification(
+    data: SendTestRequest,
+):
+    return await send_test_email(data.email, data.channel)
+
+
+# print("Reached send-test route")
+
+# @router.post("/send-test")
+# async def send_test_notification():
+#     return {"ok": True}

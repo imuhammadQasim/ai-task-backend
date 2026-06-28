@@ -9,6 +9,7 @@ from app.config import settings
 from app.models.user import User
 from app.models.notification import Notification
 from app.models.messenger_account import MessengerAccount
+from app.services.email_service import send_email
 
 # Configure resend API key
 resend.api_key = settings.RESEND_API_KEY
@@ -104,3 +105,31 @@ async def send_notification(user_id: str, task, summary: str, channel: str, db: 
     db.add(notif)
     await db.commit()
     return success
+
+
+
+async def send_test_email(
+    email: str,
+    channel: str,
+) -> bool:
+
+    if channel != "email":
+        return False
+
+    try:
+
+        await send_email(
+            to_email=email,
+            subject="PingFlow Test Notification",
+            html="""
+                <h2>PingFlow</h2>
+
+                <p>This is a test notification.</p>
+            """,
+        )
+
+        return True
+
+    except Exception as e:
+        print(e)
+        return False

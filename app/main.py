@@ -30,7 +30,7 @@ async def health_check():
     return {"status": "ok"}
 
 # Include all 4 routers with prefixes
-app.include_router(auth.router, prefix="/auth", tags=["auth"])
-app.include_router(tasks.router, prefix="/tasks", tags=["tasks"])
-app.include_router(notifications.router, prefix="/notifications", tags=["notifications"])
-app.include_router(webhooks.router, prefix="/webhooks", tags=["webhooks"])
+app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
+app.include_router(tasks.router, prefix="/api/tasks", tags=["tasks"])
+app.include_router(notifications.router, prefix="/api/notifications", tags=["notifications"])
+app.include_router(webhooks.router, prefix="/api/webhooks", tags=["webhooks"])
