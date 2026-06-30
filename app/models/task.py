@@ -1,5 +1,5 @@
 # app/models/task.py
-from sqlalchemy import Column, Integer, String, JSON, DateTime, ForeignKey
+from sqlalchemy import Column, Integer, String, JSON, DateTime, ForeignKey, Text
 from sqlalchemy.orm import relationship
 from app.database import Base
 from datetime import datetime
@@ -8,12 +8,13 @@ class Task(Base):
     __tablename__ = "tasks"
     id            = Column(Integer, primary_key=True)
     user_id       = Column(String, ForeignKey("users.id"), nullable=False)
-    raw_input     = Column(String)          
-    task_type     = Column(String)           
-    config        = Column(JSON)             
-    schedule_mins = Column(Integer)             
+    raw_input     = Column(String)
+    task_type     = Column(String)
+    config        = Column(JSON)
+    schedule_mins = Column(Integer)
     status        = Column(String, default="active")
-    last_hash     = Column(String)           
+    last_hash     = Column(String)
+    last_answer   = Column(Text, nullable=True)  # prior Gemini grounded-answer text for topic mode
     last_run      = Column(DateTime)
     next_run      = Column(DateTime)
     created_at    = Column(DateTime, default=datetime.utcnow)

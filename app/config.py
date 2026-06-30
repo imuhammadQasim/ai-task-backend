@@ -11,6 +11,7 @@ class Settings(BaseSettings):
     STRIPE_SECRET_KEY: str = ""
     STRIPE_WEBHOOK_SECRET: str = ""
     CLERK_WEBHOOK_SECRET: str = ""
+    JWKS_CLERK_KEY: str = ""
     META_PAGE_TOKEN: str = ""
     GMAIL_EMAIL: str = ""
     GMAIL_APP_PASSWORD: str = ""

@@ -22,8 +22,10 @@ playwright>=1.42.0
 # AI / LLM
 openai>=1.14.0
 google-generativeai>=0.4.1
+google-genai>=1.0.0
 
 # Auth, Payments, and Notifications
 svix>=1.21.0
 stripe>=8.3.0
 resend>=0.8.0
+python-jose[cryptography]>=3.3.0

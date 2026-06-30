@@ -1,5 +1,5 @@
 # app/routers/auth.py
-import httpx
+from jose import jwt, JWTError
 from fastapi import APIRouter, Header, HTTPException, Depends, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
@@ -10,46 +10,61 @@ from app.models.user import User
 
 router = APIRouter()
 
-# Dependency to get current user from Bearer Token verified against Clerk
-async def get_current_user(authorization: str = Header(None)) -> str:
+# JWKS_CLERK_KEY stores the raw base64 SPKI body (as copied from the Clerk
+# dashboard) without PEM headers; python-jose requires the full PEM block.
+_CLERK_PUBLIC_KEY_PEM = (
+    "-----BEGIN PUBLIC KEY-----\n" + settings.JWKS_CLERK_KEY + "\n-----END PUBLIC KEY-----\n"
+)
+
+# Dependency to get current user from Bearer Token, verified locally via RS256
+# against Clerk's public key (JWKS_CLERK_KEY) instead of calling Clerk's API.
+async def get_current_user(
+    authorization: str = Header(None),
+    db: AsyncSession = Depends(get_db),
+) -> str:
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Missing or invalid Authorization header",
         )
     token = authorization.split(" ")[1]
-    
-    # We call the Clerk verify endpoint to verify the Bearer token
-    # https://api.clerk.com/v1/tokens/verify
-    # Note: clerk API requests require authorization using Clerk API Secret, but
-    # here the instruction says: "Use httpx to call https://api.clerk.com/v1/tokens/verify with the token as Bearer."
-    async with httpx.AsyncClient() as client:
-        try:
-            response = await client.post(
-                "https://api.clerk.com/v1/tokens/verify",
-                headers={"Authorization": f"Bearer {token}"},
-                timeout=10.0
-            )
-        except Exception as e:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail=f"Clerk verification request failed: {str(e)}"
-            )
-        
-        if response.status_code != 200:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid token"
-            )
-        
-        data = response.json()
-        user_id = data.get("sub")
-        if not user_id:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Token validation failed: sub not found"
-            )
-        return user_id
+
+    try:
+        payload = jwt.decode(
+            token,
+            _CLERK_PUBLIC_KEY_PEM,
+            algorithms=["RS256"],
+            audience=None,
+            options={"verify_aud": False},
+        )
+    except JWTError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid token"
+        )
+
+    user_id = payload.get("sub")
+    if not user_id:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token validation failed: sub not found"
+        )
+
+    # Just-in-time user provisioning: the Clerk user.created webhook can't reach
+    # a local backend, so ensure an authenticated user always has a DB row to
+    # satisfy foreign keys (e.g. tasks.user_id). The webhook still backfills the
+    # real email later if/when it fires.
+    result = await db.execute(select(User).where(User.id == user_id))
+    if result.scalar_one_or_none() is None:
+        db.add(User(
+            id=user_id,
+            clerk_id=user_id,
+            email=f"{user_id}@noemail.clerk",
+            plan_tier="free",
+        ))
+        await db.commit()
+
+    return user_id
 
 @router.post("/clerk-webhook")
 async def clerk_webhook(request: Request, db: AsyncSession = Depends(get_db)):

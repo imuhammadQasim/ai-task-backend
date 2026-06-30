@@ -12,8 +12,8 @@ from app.models.task import Task
 from app.models.task_run import TaskRun
 from app.models.notification import Notification
 from app.services.scraper import fetch_page
-from app.services.llm import check_condition
-from app.services.notifier import send_notification, send_test_notification
+from app.services.llm import check_condition, query_with_grounding, compare_answers
+from app.services.notifier import send_notification
 from app.worker.celery_app import celery_app
 
 # Create synchronous engine and session maker for Celery worker operations
@@ -75,10 +75,11 @@ def run_task(self, task_id: int):
                         task_async = res_async.scalar_one_or_none()
                         
                         channel = task_config.get("notification_channel", "email")
+                        reminder_text = task_config.get("message") or task_config.get("condition")
                         await send_notification(
                             user_id=task_async.user_id,
                             task=task_async,
-                            summary=f"Reminder: {task_config.get('condition')}",
+                            summary=f"Reminder: {reminder_text}",
                             channel=channel,
                             db=async_db
                         )
@@ -92,31 +93,87 @@ def run_task(self, task_id: int):
             
         # 3. Handle web_monitor task type
         elif task.task_type == "web_monitor":
+            channel = task_config.get("notification_channel", "email")
+
+            # 3a. Topic mode — Gemini Search-grounded answer, compared semantically.
+            if task_config.get("monitor_mode") == "topic":
+                topic = task_config.get("topic")
+                if not topic:
+                    # Invalid config, stop task run
+                    return
+
+                # query_with_grounding is a synchronous SDK call; bridge it through
+                # asyncio.to_thread() so we don't block the loop (same run_async helper).
+                new_answer = run_async(asyncio.to_thread(query_with_grounding, topic))
+
+                if task.last_answer:
+                    changed, summary = run_async(
+                        asyncio.to_thread(compare_answers, task.last_answer, new_answer)
+                    )
+                else:
+                    changed, summary = True, "First check — establishing baseline."
+
+                # Always store the latest answer as the new baseline.
+                task.last_answer = new_answer
+
+                # Write TaskRun log
+                task_run = TaskRun(
+                    task_id=task.id,
+                    ran_at=now,
+                    change_detected=changed,
+                    notif_sent=changed,
+                    result_summary=summary
+                )
+                session.add(task_run)
+
+                # If a meaningful change occurred, dispatch notification.
+                if changed:
+                    async def notify_and_log():
+                        from app.database import AsyncSessionLocal as db_async_session_maker
+                        async with db_async_session_maker() as async_db:
+                            stmt_async = select(Task).where(Task.id == task.id)
+                            res_async = await async_db.execute(stmt_async)
+                            task_async = res_async.scalar_one_or_none()
+
+                            await send_notification(
+                                user_id=task_async.user_id,
+                                task=task_async,
+                                summary=summary,
+                                channel=channel,
+                                db=async_db
+                            )
+                    run_async(notify_and_log())
+
+                task.last_run = now
+                task.next_run = now + timedelta(minutes=task.schedule_mins or 60)
+                session.commit()
+                return
+
+            # 3b. URL mode — existing fetch + MD5 hash + check_condition (unchanged).
             url = task_config.get("url")
             condition = task_config.get("condition")
             requires_js = task_config.get("requires_js", False)
-            channel = task_config.get("notification_channel", "email")
-            
+
             if not url or not condition:
                 # Invalid config, stop task run
                 return
-                
+
             # Fetch webpage content
             try:
                 html = run_async(fetch_page(url, requires_js=requires_js))
             except Exception as scrape_err:
                 # Scrape failed, retry task
                 raise scrape_err
-                
+
             # Hash fetched page content
             content_hash = hashlib.md5(html.encode("utf-8", errors="ignore")).hexdigest()
-            
+
             # Hash check
             if content_hash == task.last_hash:
                 # Update task last run
                 task.last_run = now
                 task.next_run = now + timedelta(minutes=task.schedule_mins or 60)
-                
+
                 # Write TaskRun log
                 task_run = TaskRun(
                     task_id=task.id,
@@ -128,10 +185,10 @@ def run_task(self, task_id: int):
                 session.add(task_run)
                 session.commit()
                 return
-                
+
             # Content changed, call LLM to evaluate condition
             matched, summary = run_async(check_condition(html, condition))
-            
+
             # Write TaskRun log
             task_run = TaskRun(
                 task_id=task.id,
@@ -141,7 +198,7 @@ def run_task(self, task_id: int):
                 result_summary=summary
             )
             session.add(task_run)
-            
+
             # If condition met, dispatch notification
             if matched:
                 async def notify_and_log():
@@ -150,7 +207,7 @@ def run_task(self, task_id: int):
                         stmt_async = select(Task).where(Task.id == task.id)
                         res_async = await async_db.execute(stmt_async)
                         task_async = res_async.scalar_one_or_none()
-                        
+
                         await send_notification(
                             user_id=task_async.user_id,
                             task=task_async,
@@ -159,13 +216,13 @@ def run_task(self, task_id: int):
                             db=async_db
                         )
                 run_async(notify_and_log())
-                
+
             # Update task run state and hash
             task.last_hash = content_hash
             task.last_run = now
             task.next_run = now + timedelta(minutes=task.schedule_mins or 60)
             session.commit()
-            
+
     except Exception as exc:
         session.rollback()
         # Retry logic with Celery

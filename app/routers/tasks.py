@@ -2,20 +2,44 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
-from datetime import datetime, timedelta
-from pydantic import BaseModel
-from typing import Literal
+from datetime import datetime, timedelta, date
+from pydantic import BaseModel, model_validator
+from typing import Literal, Optional
 
 from app.database import get_db
 from app.routers.auth import get_current_user
 from app.models.task import Task
-from app.services import parser
 
 router = APIRouter()
 
 class TaskCreateRequest(BaseModel):
-    raw_input: str
+    task_type: Literal["web_monitor", "date_reminder"]
     notification_channel: Literal["email", "messenger"]
+    schedule_mins: Optional[int] = None
+    monitor_mode: Optional[Literal["url", "topic"]] = None
+    url: Optional[str] = None
+    condition: Optional[str] = None
+    topic: Optional[str] = None
+    reminder_date: Optional[date] = None
+    message: Optional[str] = None
+
+    @model_validator(mode="after")
+    def validate_required_fields(self):
+        if self.task_type == "web_monitor":
+            if self.monitor_mode is None:
+                raise ValueError("monitor_mode is required for web_monitor tasks")
+            if self.monitor_mode == "url" and (not self.url or not self.condition):
+                raise ValueError("url and condition are required when monitor_mode is 'url'")
+            if self.monitor_mode == "topic" and not self.topic:
+                raise ValueError("topic is required when monitor_mode is 'topic'")
+            if self.schedule_mins is None:
+                raise ValueError("schedule_mins is required for web_monitor tasks")
+            if self.schedule_mins < 60:
+                self.schedule_mins = 60
+        elif self.task_type == "date_reminder":
+            if not self.reminder_date or not self.message:
+                raise ValueError("reminder_date and message are required for date_reminder tasks")
+        return self
 
 @router.post("", response_model=dict)
 async def create_task(
@@ -23,38 +47,40 @@ async def create_task(
     current_user_id: str = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    try:
-        parsed_config = await parser.parse_task(payload.raw_input)
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=str(e) or "Could not parse task input"
-        )
-    
-    task_type = parsed_config.get("task_type", "web_monitor")
-    schedule_mins = parsed_config.get("schedule_mins", 60)
-    if schedule_mins < 60:
-        schedule_mins = 60
-        
     now = datetime.utcnow()
-    next_run = now + timedelta(minutes=schedule_mins)
-    
-    # Extract config details
-    config_dict = {
-        "url": parsed_config.get("url"),
-        "condition": parsed_config.get("condition"),
-        "notification_channel": payload.notification_channel
-    }
-    
-    # For date_reminder tasks, parse context or config info if parsed
-    if task_type == "date_reminder":
-        # Check if parser returned reminder_date
-        config_dict["reminder_date"] = parsed_config.get("reminder_date")
-        
+
+    # Build config + schedule directly from the validated payload.
+    if payload.task_type == "web_monitor":
+        schedule_mins = payload.schedule_mins  # validator guarantees >= 60
+        next_run = now + timedelta(minutes=schedule_mins)
+
+        config_dict = {
+            "monitor_mode": payload.monitor_mode,
+            "notification_channel": payload.notification_channel,
+        }
+        if payload.monitor_mode == "url":
+            config_dict["url"] = payload.url
+            config_dict["condition"] = payload.condition
+        else:  # topic mode
+            config_dict["topic"] = payload.topic
+    else:  # date_reminder
+        # Reminder tasks are polled on a schedule until the reminder_date matches;
+        # keep the existing schedule-based next_run behavior (default 60 mins).
+        schedule_mins = payload.schedule_mins if payload.schedule_mins is not None else 60
+        if schedule_mins < 60:
+            schedule_mins = 60
+        next_run = now + timedelta(minutes=schedule_mins)
+
+        config_dict = {
+            "reminder_date": payload.reminder_date.isoformat(),
+            "message": payload.message,
+            "notification_channel": payload.notification_channel,
+        }
+
     db_task = Task(
         user_id=current_user_id,
-        raw_input=payload.raw_input,
-        task_type=task_type,
+        raw_input=None,
+        task_type=payload.task_type,
         config=config_dict,
         schedule_mins=schedule_mins,
         status="active",
@@ -64,7 +90,7 @@ async def create_task(
     db.add(db_task)
     await db.commit()
     await db.refresh(db_task)
-    
+
     return {
         "id": db_task.id,
         "user_id": db_task.user_id,
